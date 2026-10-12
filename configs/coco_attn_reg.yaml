@@ -1,0 +1,90 @@
+dataset:
+  # 按服务器实际目录修改；目录结构见 README 中的 COCO 说明。
+  root_dir: /home/stu_24/datasets/MSCOCO
+  name_list_dir: /home/stu_24/bsy/WeCLIP+SAM3/datasets/coco
+  num_classes: 81  # background + 80 COCO classes
+  crop_size: 320
+  resize_range: [512, 2048]
+  rescale_range: [0.5, 2.0]
+  ignore_index: 255
+
+work_dir:
+  dir: work_dir_coco
+  ckpt_dir: checkpoints
+  pred_dir: predictions
+  segs_dir: segs
+  tb_logger_dir: tb_logger
+
+train:
+  split: train
+  samples_per_gpu: 4
+  num_workers: 10
+  max_iters: 80000
+  cam_iters: 5000
+  eval_iters: 10000
+  log_iters: 200
+  save_start_iter: 40000
+
+val:
+  split: val
+  # every：每隔 eval_iters 验证；first_only：只验证一次；disabled：不验证。
+  mode: every
+  metric_chunk_size: 50  # 分块累计 81 类混淆矩阵，避免验证时缓存大量原尺寸 mask
+
+optimizer:
+  type: AdamW
+  # 保留原 COCO recipe 的学习率；如果要严格复刻当前 VOC recipe，可改为 2e-5。
+  learning_rate: 2e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  warmup_iter: 50
+  warmup_ratio: 1e-6
+  power: 1.0
+
+clip_init:
+  clip_pretrain_path: /home/stu_24/bsy/WeCLIP+SAM/pretrained/ViT-B-16.pt
+  embedding_dim: 256
+  in_channels: [768, 768, 768, 768]
+
+segformer_head:
+  use_adapter: true
+
+mutual_distill:
+  enabled: true
+  weight: 0.1
+  start_iter: 0
+
+# 在线 SGFR：Grounding-DINO 产生框，refined CAM 产生点，SAM3 联合接受框+点。
+# 失败或没有有效前景时自动回退到 CAM 伪标签。
+online_sgfr:
+  enabled: true
+  start_iter: 0
+  interval: 1
+  use_cam_points: true
+  joint_box_point_prompt: true
+
+  # COCO 验证集较大，默认只额外评估前 500 张的 SGFR 伪标签；
+  # 分割与 CAM 的验证仍覆盖完整 val 集。改为 0 可全量评估 SGFR。
+  eval_enabled: true
+  eval_samples: 500
+
+  sam_backend: sam3
+  sam3_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/sam3/sam3.pt
+  sam3_bpe_path: null
+  sam3_resolution: 1008
+  sam3_multimask_output: false
+  sam3_compile: false
+
+  # SAM1 回退配置，仅 sam_backend=sam1 时使用。
+  sam_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/sam/sam_vit_h_4b8939.pth
+  sam_model_type: vit_h
+
+  gdino_config: /home/stu_24/bsy/WeCLIP+SAM/pretrained/groundingdino/GroundingDINO_SwinT_OGC.py
+  gdino_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/groundingdino/groundingdino_swint_ogc.pth
+  gdino_text_encoder_type: /home/stu_24/bsy/WeCLIP+SAM/pretrained/bert-base-uncased
+
+  box_threshold: 0.3
+  text_threshold: 0.25
+  cam_peak_threshold: 0.5

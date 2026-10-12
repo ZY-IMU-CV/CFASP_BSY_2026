@@ -1,0 +1,112 @@
+dataset:
+  root_dir: /home/stu_24/datasets/VOCdevkit/VOC2012
+  name_list_dir: /home/stu_24/bsy/WeCLIP+SAM/datasets/voc
+  num_classes: 21
+  crop_size: 320
+  resize_range: [512, 2048]
+  rescale_range: [0.5, 2.0]
+  ignore_index: 255
+
+work_dir:
+  dir: work_dir_voc
+  ckpt_dir: checkpoints
+  pred_dir: predictions
+  segs_dir: segs
+  tb_logger_dir: tb_logger
+
+train:
+  split: train_aug
+  samples_per_gpu: 4 #4 #2
+  max_iters: 30000
+  cam_iters: 2000
+  eval_iters: 2000
+  log_iters: 200
+
+
+val:
+  split: val
+  mode: first_only  # every：每隔 eval_iters 验证；first_only：只在第一个 eval_iters 验证；disabled：完全不验证
+
+  # 验证集框架图素材输出。每个样本会分别保存中间结果，并额外生成 3x3 framework_panel.png。
+  visualization:
+    enabled: true
+    output_dir: visualizations  # 相对路径会保存到 work_dir.dir 下，也可填写绝对路径
+    max_samples: 20  # 0 表示不限制；sample_names 非空时表示最多输出其中这些 VOC 图像
+    sample_names: []  # 例如 ["2007_000032", "2007_000033"]；空列表表示按验证顺序选择
+    overlay_alpha: 0.55  # 仅控制初始/细化 CAM 叠加原图时的透明度
+
+optimizer:
+  type: AdamW
+  learning_rate: 2e-5 #2e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  warmup_iter: 50 #1500
+  warmup_ratio: 1e-6
+  power: 1.0
+
+clip_init:
+  clip_pretrain_path: /home/stu_24/bsy/WeCLIP+SAM/pretrained/ViT-B-16.pt
+  embedding_dim: 256
+  in_channels: [768, 768,768,768]
+
+# 消融实验总开关。四组实验只需修改下面两个布尔值：
+# baseline: false/false；+DECA: true/false；+BPCR: false/true；full: true/true。
+ablation:
+  deca: true  # false：恢复原始 11 层特征的单 CLIP MLP + Transformer decoder（不会移除 decoder）
+  bpcr: true  # false：不加载 Grounding-DINO/SAM，训练伪标签回退为原始 refined CAM
+
+  # BPCR 内部消融（实验时保持 deca=true、bpcr=true）：
+  # false/false/false：原始 refined CAM，不运行 BPCR
+  # true /false/false：Grounding-DINO Box -> SAM
+  # false/true /false：全局 CAM 峰值 Point -> SAM（不加载 Grounding-DINO）
+  # true /true /true ：框内 CAM 点，Box+Point 联合输入 SAM（完整 BPCR）
+  bpcr_internal:
+    box: true
+    point: true
+    joint: true  # 仅允许在 box=true 且 point=true 时开启
+
+segformer_head:
+  use_adapter: true  # DECA=true 时生效；DECA=false 时强制使用原始 MLP
+
+mutual_distill:
+  enabled: true  # DECA=true 时生效；DECA=false 时自动关闭
+  weight: 0.1  # 互蒸馏损失权重；仅 enabled=true 时生效
+  start_iter: 0  # 从第几次迭代开始启用；仅 enabled=true 时生效
+
+# 在线动态 SGFR 伪标签监督配置
+# 开启后默认使用 Grounding-DINO 生成框提示，并送入 SAM/SGFR 生成在线伪标签。
+# Box/Point/Joint 路径由 ablation.bpcr_internal 统一控制。
+# 生成成功时使用 SGFR 伪标签监督 decoder；生成失败或没有前景时自动回退到原 CAM 伪标签。
+online_sgfr:
+  # BPCR 的实现细节；整个模块由 ablation.bpcr 统一控制。
+  start_iter: 0  # 从第几次迭代开始启用在线 SGFR，建议先 warmup 若干 iter 后再开启
+  interval: 1  # 每隔多少次迭代运行一次 SGFR；1 表示每次迭代都运行，数值越大训练越快
+  eval_enabled: true  # 验证时是否额外评估 SGFR 伪标签质量；会运行 SAM/DINO，因此会增加验证耗时
+  eval_samples: 0  # 每次验证评估多少张 SGFR 伪标签；0 表示全量验证集
+
+  # SAM 后端：默认启用 SAM3 的 PVS（框+点）路径；改为 sam1 可回退到原始实现。
+  sam_backend: sam3  # 可选 sam3 / sam1；默认 sam3
+
+  # SAM3 PVS 严格离线配置：不会尝试从 Hugging Face 下载权重。
+  sam3_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/sam3/sam3.pt
+  sam3_bpe_path: null  # null 时使用已安装 sam3 包内置的 BPE 文件，不联网
+  sam3_resolution: 1008  # 官方默认且推荐的输入分辨率
+  sam3_multimask_output: false  # 联合框+多点通常无歧义；false 更省时，true 时自动选最高分 mask
+  sam3_compile: false  # 首次编译开销较大，在线训练默认关闭
+
+  # SAM1 回退配置：仅 sam_backend=sam1 时生效。
+# sam_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/sam/sam_vit_b_01ec64.pth
+  sam_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/sam/sam_vit_h_4b8939.pth
+  sam_model_type: vit_h  # 可选 vit_h / vit_l / vit_b，需和 checkpoint 匹配
+
+  # Grounding-DINO 配置：仅 bpcr_internal.box=true 时需要以下两个路径
+  gdino_config: /home/stu_24/bsy/WeCLIP+SAM/pretrained/groundingdino/GroundingDINO_SwinT_OGC.py  # 例如 /path/to/GroundingDINO_SwinT_OGC.py
+  gdino_checkpoint: /home/stu_24/bsy/WeCLIP+SAM/pretrained/groundingdino/groundingdino_swint_ogc.pth  # 例如 /path/to/groundingdino_swint_ogc.pth
+  gdino_text_encoder_type: /home/stu_24/bsy/WeCLIP+SAM/pretrained/bert-base-uncased # 离线服务器建议填本地 bert-base-uncased 目录；null 时使用 gdino_config 里的 text_encoder_type
+
+  # SGFR 阈值配置
+  box_threshold: 0.3  # Grounding-DINO 框置信度阈值，越高框越少但更可靠
+  text_threshold: 0.25  # Grounding-DINO 文本匹配阈值，越高类别匹配越严格
+  cam_peak_threshold: 0.5  # point=true 时生效；Joint 模式下在每个 DINO 框内部提取 CAM 峰值点
